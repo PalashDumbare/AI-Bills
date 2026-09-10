@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from .database import get_session, init_db
 from .models import Document, Appliance, Bill
-from .schemas import StructureRequest, StructureResponse, IndexResponse
+from .schemas import StructureRequest, StructureResponse, IndexResponse, ChatRequest, ChatResponse
 from .services.extractor import extract_structured_data
 
 
@@ -177,4 +177,36 @@ async def index_document(document_id: str, session: AsyncSession = Depends(get_s
         document_id=document_id,
         chunks_indexed=num_indexed,
         total_chunks=len(chunks),
+    )
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Answer questions about documents using RAG."""
+    from .services.embeddings import embed_text
+    from .services.vector_store import search_chunks
+    from .services.chat import chat_with_documents
+
+    query_embedding = embed_text(request.question)
+
+    results = search_chunks(
+        query_embedding=query_embedding,
+        document_id=request.document_id,
+        limit=5,
+    )
+
+    if not results:
+        return ChatResponse(
+            answer="No relevant documents found. Please upload and index documents first.",
+            sources=[],
+        )
+
+    response = await chat_with_documents(
+        question=request.question,
+        context_chunks=results,
+    )
+
+    return ChatResponse(
+        answer=response["answer"],
+        sources=response["sources"],
     )
