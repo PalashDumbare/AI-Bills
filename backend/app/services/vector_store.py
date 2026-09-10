@@ -50,6 +50,7 @@ def index_chunks(
     client = get_client()
 
     points = []
+    bm25_chunks = []
     for i, (text, embedding) in enumerate(zip(texts, embeddings)):
         point_id = str(uuid.uuid4())
         payload = {
@@ -66,10 +67,21 @@ def index_chunks(
             payload=payload,
         ))
 
+        bm25_chunks.append({
+            "id": point_id,
+            "document_id": document_id,
+            "chunk_index": i,
+            "text": text,
+        })
+
     client.upsert(
         collection_name=COLLECTION_NAME,
         points=points,
     )
+
+    from .bm25_search import get_bm25_index
+    bm25_index = get_bm25_index()
+    bm25_index.add_documents(bm25_chunks)
 
     return len(points)
 
@@ -127,3 +139,7 @@ def delete_document_chunks(document_id: str):
             ],
         ),
     )
+
+    from .bm25_search import get_bm25_index
+    bm25_index = get_bm25_index()
+    bm25_index.remove_document(document_id)

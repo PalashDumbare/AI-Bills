@@ -8,7 +8,7 @@ from unittest.mock import patch, AsyncMock
 class TestChatEndpoint:
     @pytest.mark.asyncio
     async def test_chat_no_documents_indexed(self, client):
-        with patch("app.services.vector_store.search_chunks", return_value=[]):
+        with patch("app.services.hybrid_search.hybrid_search", return_value=[]):
             response = await client.post(
                 "/chat",
                 json={"question": "What is my purchase date?"},
