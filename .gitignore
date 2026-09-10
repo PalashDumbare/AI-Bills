@@ -34,5 +34,8 @@ backend/storage/
 # Uvicorn
 uvicorn.log
 
+# Qdrant local storage
+qdrant_storage/
+
 # Alembic
 backend/alembic/versions/*.pyc

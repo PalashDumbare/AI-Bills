@@ -4,6 +4,7 @@ from .document import (
     ApplianceResponse,
     BillResponse,
     StructureResponse,
+    IndexResponse,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "ApplianceResponse",
     "BillResponse",
     "StructureResponse",
+    "IndexResponse",
 ]

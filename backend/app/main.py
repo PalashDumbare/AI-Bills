@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from .database import get_session, init_db
 from .models import Document, Appliance, Bill
-from .schemas import StructureRequest, StructureResponse
+from .schemas import StructureRequest, StructureResponse, IndexResponse
 from .services.extractor import extract_structured_data
 
 
@@ -133,4 +133,48 @@ async def structure_document(
         document_id=document_id,
         document_type=structured["document_type"],
         structured_data=entry,
+    )
+
+
+@app.post("/documents/{document_id}/index", response_model=IndexResponse)
+async def index_document(document_id: str, session: AsyncSession = Depends(get_session)):
+    """Chunk text, generate embeddings, store in Qdrant."""
+    result = await session.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found. Upload first.")
+
+    extracted_path = os.path.join(
+        os.path.dirname(__file__), "extracted", f"{document_id}_extracted.txt"
+    )
+    if not os.path.exists(extracted_path):
+        raise HTTPException(status_code=404, detail="Extracted text not found. Run /extract first.")
+
+    with open(extracted_path) as f:
+        text = f.read()
+
+    from .services.chunker import chunk_text
+    from .services.embeddings import embed_texts
+    from .services.vector_store import index_chunks, delete_document_chunks
+
+    chunks = chunk_text(text)
+    if not chunks:
+        raise HTTPException(status_code=422, detail="No chunks generated from text.")
+
+    chunk_texts = [c.text for c in chunks]
+    embeddings = embed_texts(chunk_texts)
+
+    delete_document_chunks(document_id)
+    num_indexed = index_chunks(
+        document_id=document_id,
+        texts=chunk_texts,
+        embeddings=embeddings,
+        metadata={"document_type": doc.document_type},
+    )
+
+    return IndexResponse(
+        document_id=document_id,
+        chunks_indexed=num_indexed,
+        total_chunks=len(chunks),
     )
