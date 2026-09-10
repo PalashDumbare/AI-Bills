@@ -21,6 +21,10 @@ backend/storage/
 .vscode/
 .idea/
 
+# Markdown (except README)
+*.md
+!README.md
+
 # OS
 .DS_Store
 
