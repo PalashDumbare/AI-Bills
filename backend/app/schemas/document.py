@@ -50,3 +50,20 @@ class IndexResponse(BaseModel):
     document_id: str
     chunks_indexed: int
     total_chunks: int
+
+
+class ChatRequest(BaseModel):
+    question: str
+    document_id: str | None = None
+
+
+class SourceChunk(BaseModel):
+    document_id: str
+    chunk_index: int
+    text: str
+    score: float
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[SourceChunk]

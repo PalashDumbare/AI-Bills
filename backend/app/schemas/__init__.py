@@ -5,6 +5,9 @@ from .document import (
     BillResponse,
     StructureResponse,
     IndexResponse,
+    ChatRequest,
+    SourceChunk,
+    ChatResponse,
 )
 
 __all__ = [
@@ -14,4 +17,7 @@ __all__ = [
     "BillResponse",
     "StructureResponse",
     "IndexResponse",
+    "ChatRequest",
+    "SourceChunk",
+    "ChatResponse",
 ]
