@@ -44,3 +44,9 @@ class StructureResponse(BaseModel):
     document_id: str
     document_type: str
     structured_data: ApplianceResponse | BillResponse
+
+
+class IndexResponse(BaseModel):
+    document_id: str
+    chunks_indexed: int
+    total_chunks: int

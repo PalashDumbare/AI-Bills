@@ -10,5 +10,7 @@ alembic
 python-dateutil
 pydantic-settings
 httpx
+qdrant-client
+sentence-transformers
 pytest
 pytest-asyncio
