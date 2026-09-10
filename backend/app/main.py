@@ -1,0 +1,136 @@
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from .database import get_session, init_db
+from .models import Document, Appliance, Bill
+from .schemas import StructureRequest, StructureResponse
+from .services.extractor import extract_structured_data
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Receive PDF/image, validate, generate unique ID, save file, create DB record."""
+    from .services.document import save_uploaded_file
+
+    return await save_uploaded_file(file, user_id, session)
+
+
+@app.post("/documents/{document_id}/extract")
+async def extract_document(document_id: str):
+    """Extract text from uploaded document (Milestone 2)."""
+    from .services.document import extract_document_text
+
+    return extract_document_text(document_id)
+
+
+@app.post("/documents/{document_id}/structure", response_model=StructureResponse)
+async def structure_document(
+    document_id: str,
+    request: StructureRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Extract structured data from text and store in PostgreSQL."""
+    # Check if document exists in DB
+    result = await session.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found. Upload first.")
+
+    # Check if already structured
+    if doc.document_type:
+        existing = await session.execute(
+            select(Appliance).where(Appliance.document_id == document_id)
+        )
+        appliance = existing.scalar_one_or_none()
+        if appliance:
+            return StructureResponse(
+                document_id=document_id,
+                document_type="appliance_invoice",
+                structured_data=appliance,
+            )
+
+        existing = await session.execute(
+            select(Bill).where(Bill.document_id == document_id)
+        )
+        bill = existing.scalar_one_or_none()
+        if bill:
+            return StructureResponse(
+                document_id=document_id,
+                document_type="bill",
+                structured_data=bill,
+            )
+
+    # Read extracted text
+    extracted_path = os.path.join(
+        os.path.dirname(__file__), "extracted", f"{document_id}_extracted.txt"
+    )
+    if not os.path.exists(extracted_path):
+        raise HTTPException(status_code=404, detail="Extracted text not found. Run /extract first.")
+
+    with open(extracted_path) as f:
+        text = f.read()
+
+    # Try LLM extraction first, fallback to regex
+    structured = None
+    try:
+        from .services.llm_client import extract_with_llm
+        structured = await extract_with_llm(text)
+    except Exception:
+        pass
+
+    if not structured:
+        structured = extract_structured_data(text)
+
+    if not structured:
+        raise HTTPException(status_code=422, detail="Could not extract structured data from text.")
+
+    # Update existing Document record
+    doc.document_type = structured.get("document_type")
+    doc.user_id = request.user_id
+    session.add(doc)
+
+    if structured["document_type"] == "appliance_invoice":
+        entry = Appliance(
+            document_id=document_id,
+            brand=structured.get("brand"),
+            product=structured.get("product"),
+            model=structured.get("model"),
+            purchase_date=structured.get("purchase_date"),
+            amount=structured.get("amount"),
+            warranty_months=structured.get("warranty_months"),
+            warranty_expiry=structured.get("warranty_expiry"),
+        )
+    else:
+        entry = Bill(
+            document_id=document_id,
+            provider=structured.get("provider"),
+            bill_type=structured.get("bill_type"),
+            amount=structured.get("amount"),
+        )
+
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+
+    return StructureResponse(
+        document_id=document_id,
+        document_type=structured["document_type"],
+        structured_data=entry,
+    )

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+pdfplumber
+pytesseract
+pillow
+sqlalchemy[asyncio]
+asyncpg
+alembic
+python-dateutil
+pydantic-settings
+httpx
+pytest
+pytest-asyncio

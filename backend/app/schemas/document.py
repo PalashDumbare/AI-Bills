@@ -1,0 +1,46 @@
+from datetime import date
+from decimal import Decimal
+from pydantic import BaseModel
+
+
+class UploadResponse(BaseModel):
+    document_id: str
+    filename: str
+    file_type: str
+    user_id: str
+
+
+class StructureRequest(BaseModel):
+    user_id: str
+
+
+class ApplianceResponse(BaseModel):
+    id: str
+    document_id: str
+    brand: str | None
+    product: str | None
+    model: str | None
+    purchase_date: date | None
+    amount: Decimal | None
+    warranty_months: int | None
+    warranty_expiry: date | None
+
+    model_config = {"from_attributes": True}
+
+
+class BillResponse(BaseModel):
+    id: str
+    document_id: str
+    provider: str | None
+    bill_type: str | None
+    amount: Decimal | None
+    due_date: date | None
+    billing_period: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class StructureResponse(BaseModel):
+    document_id: str
+    document_type: str
+    structured_data: ApplianceResponse | BillResponse

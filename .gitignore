@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment
+.env
+
+# Database
+*.db
+
+# Extracted text files
+backend/app/extracted/
+backend/extracted/
+
+# Uploaded documents (user data)
+backend/app/storage/
+backend/storage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Pytest
+.pytest_cache/
+
+# Uvicorn
+uvicorn.log
+
+# Alembic
+backend/alembic/versions/*.pyc
