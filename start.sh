@@ -1,6 +1,74 @@
 #!/bin/bash
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+PID_FILE="/tmp/ai-bills-uvicorn.pid"
+PORT=8000
+
+stop_existing_server() {
+  local found=0
+  # 1) pid file
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "Stopping previous server (pid $pid)..."
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+      found=1
+    fi
+    rm -f "$PID_FILE" 2>/dev/null || true
+  fi
+  # 2) lsof on port (macOS/Linux)
+  if command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids=$(lsof -ti :"$PORT" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+      echo "Stopping server on :$PORT (pids: $pids)..."
+      echo "$pids" | xargs kill 2>/dev/null || true
+      sleep 1
+      echo "$pids" | xargs kill -9 2>/dev/null || true
+      found=1
+    fi
+  fi
+  # 3) pgrep fallback
+  if pgrep -f "uvicorn app.main:app" >/dev/null 2>&1; then
+    echo "Stopping uvicorn processes..."
+    pkill -f "uvicorn app.main:app" 2>/dev/null || true
+    sleep 1
+    pkill -9 -f "uvicorn app.main:app" 2>/dev/null || true
+    found=1
+  fi
+  if [ "$found" -eq 1 ]; then
+    sleep 1
+    echo "Previous server stopped."
+  fi
+}
+
+# If script is run again while server is running, restart it
+# Also supports: ./start.sh stop | restart | start
+case "${1:-}" in
+  stop)
+    stop_existing_server
+    echo "Stopped."
+    exit 0
+    ;;
+  restart)
+    stop_existing_server
+    ;;
+  "")
+    # default: if server already running, stop it first (restart behavior)
+    if [ -f "$PID_FILE" ] || (command -v lsof >/dev/null 2>&1 && lsof -ti :"$PORT" >/dev/null 2>&1) || pgrep -f "uvicorn app.main:app" >/dev/null 2>&1; then
+      echo "==> Server already running — restarting..."
+      stop_existing_server
+    fi
+    ;;
+  *)
+    echo "Usage: $0 [stop|restart]"
+    exit 1
+    ;;
+esac
+
 VENV="$ROOT/Bills/.venv"
 # fallback venv locations
 if [ ! -f "$VENV/bin/uvicorn" ]; then
@@ -75,5 +143,8 @@ mkdir -p "$ROOT/backend/storage/documents" "$ROOT/backend/app/extracted"
 
 echo "==> [5/5] Starting FastAPI (http://localhost:8000/docs)..."
 echo "Logs: uvicorn + postgres + ollama (/tmp/ollama.log) + qdrant"
+# pid file + cleanup on exit (covers second-run restart)
+echo $$ > "$PID_FILE"
+trap 'rm -f "$PID_FILE" 2>/dev/null || true' EXIT INT TERM
 # Use venv python to ensure correct deps
 exec "$PYTHON" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --app-dir "$ROOT/backend"
