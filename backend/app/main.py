@@ -28,6 +28,70 @@ app.add_middleware(
 )
 
 
+@app.get("/documents")
+async def list_documents(
+    user_id: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    session: AsyncSession = Depends(get_session),
+):
+    """List documents, optionally filtered by user_id. Ordered by newest first."""
+    query = select(Document).order_by(Document.created_at.desc())
+    if user_id:
+        query = query.where(Document.user_id == user_id)
+    query = query.offset(skip).limit(limit)
+    result = await session.execute(query)
+    docs = result.scalars().all()
+    return [
+        {
+            "id": d.id,
+            "user_id": d.user_id,
+            "filename": d.filename,
+            "file_path": d.file_path,
+            "document_type": d.document_type,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in docs
+    ]
+
+
+@app.get("/documents/{document_id}")
+async def get_document(
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get single document with structured data (appliance/bill) if available."""
+    result = await session.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    structured = None
+    if doc.document_type == "appliance_invoice":
+        r = await session.execute(select(Appliance).where(Appliance.document_id == document_id))
+        structured = r.scalar_one_or_none()
+    elif doc.document_type == "bill":
+        r = await session.execute(select(Bill).where(Bill.document_id == document_id))
+        structured = r.scalar_one_or_none()
+    else:
+        # Fallback: try both
+        r = await session.execute(select(Appliance).where(Appliance.document_id == document_id))
+        structured = r.scalar_one_or_none()
+        if not structured:
+            r = await session.execute(select(Bill).where(Bill.document_id == document_id))
+            structured = r.scalar_one_or_none()
+
+    return {
+        "id": doc.id,
+        "user_id": doc.user_id,
+        "filename": doc.filename,
+        "file_path": doc.file_path,
+        "document_type": doc.document_type,
+        "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        "structured_data": structured,
+    }
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),

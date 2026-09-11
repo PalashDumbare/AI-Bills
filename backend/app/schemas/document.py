@@ -67,3 +67,26 @@ class SourceChunk(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
+
+
+class DocumentListItem(BaseModel):
+    id: str
+    user_id: str
+    filename: str
+    file_path: str
+    document_type: str | None
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentDetailResponse(BaseModel):
+    id: str
+    user_id: str
+    filename: str
+    file_path: str
+    document_type: str | None
+    created_at: str
+    structured_data: ApplianceResponse | BillResponse | None = None
+
+    model_config = {"from_attributes": True}

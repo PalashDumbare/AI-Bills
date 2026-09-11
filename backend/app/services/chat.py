@@ -1,11 +1,27 @@
+import re
 import httpx
 from ..config import get_settings
+
+
+_PREFIX_RE = re.compile(
+    r"^\s*(according to (the )?(context|documents?|information) (provided|given)|based on (the )?(context|documents?|information)( provided)?|from the (context|documents?))[,:]?\s*",
+    re.IGNORECASE,
+)
+
+
+def _clean_answer(text: str) -> str:
+    cleaned = _PREFIX_RE.sub("", text, count=1).lstrip()
+    # Capitalize first letter if stripped left it lowercase
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
 
 
 CHAT_PROMPT = """You are a helpful assistant that answers questions about household bills, invoices, and receipts.
 
 Use the following context from the user's documents to answer their question.
 If the context doesn't contain enough information, say "I don't have enough information from your documents to answer this."
+Answer directly and naturally. Do NOT start with phrases like "According to the context provided," "Based on the context," or "According to the documents".
 
 Context:
 {context}
@@ -50,6 +66,8 @@ async def chat_with_documents(
 
             result = response.json()
             answer = result.get("response", "").strip()
+            # Strip leaky prefixes like "According to the context provided, ..."
+            answer = _clean_answer(answer)
 
             return {
                 "answer": answer,
