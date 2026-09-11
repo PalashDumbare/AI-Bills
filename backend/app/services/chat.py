@@ -23,11 +23,61 @@ _NO_INFO_PHRASES = [
 
 def _clean_answer(text: str) -> str:
     cleaned = _PREFIX_RE.sub("", text, count=1).lstrip()
-    # Keep citation markers [1], [2] for inline linked sources - just normalize spacing
-    cleaned = re.sub(r"\s*\[(\d+)\]\s*", r" [\1] ", cleaned).strip()
+    # Strip meta-commentary the LLM sometimes emits (screenshot)
+    cleaned = re.sub(r"(?i)here is a bullet list[^:\n]*:\s*", "", cleaned)
+    cleaned = re.sub(r"(?i)here (is|are) (the )?warranty details[^:\n]*:\s*", "", cleaned)
+    cleaned = re.sub(r"(?i)the warranty details[^:\n]*are as follows:?\s*", "", cleaned)
+    cleaned = re.sub(r"(?i)^are as follows:?\s*", "", cleaned)
+    # Filler "This means that ..." often repeats previous bullet — strip including optional dash
+    cleaned = re.sub(r"(?i)\n?\s*-?\s*This means that[^.]*\.\s*", " ", cleaned)
+    # Normalize citation spacing but keep newlines for markdown lists
+    cleaned = re.sub(r"\s*\[(\d+)\]\s*", r" [\1] ", cleaned)
     cleaned = re.sub(r"\[(\d+)\]", r"[\1]", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
-    # Capitalize first letter if stripped left it lowercase
+    # Fix space before colon/period after citation: "[1] :" -> "[1]:"
+    cleaned = re.sub(r" \[(\d+)\] :", r" [\1]:", cleaned)
+    cleaned = re.sub(r" \[(\d+)\] \.", r" [\1].", cleaned)
+    # Collapse multiple spaces/tabs but preserve newlines
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    # Fix single-line multi-invoice bug: "Rs. 1,180 - Honda" -> split
+    cleaned = re.sub(r" (?<!\n)- (?=[A-Z][^-\n]{0,40} ?\[\d+\])", r"\n- ", cleaned)
+    # Remove empty bullet remnants
+    lines = [l.strip() for l in cleaned.splitlines()]
+    lines = [l for l in lines if l and l not in ("-", "- ")]
+    # Aggressive dedup for same-citation warranty duplicates (verbose + concise)
+    bullet_lines = [l for l in lines if l.startswith("-")]
+    if len(bullet_lines) >= 2:
+        cites = [re.search(r"\[(\d+)\]", l).group(1) if re.search(r"\[(\d+)\]", l) else None for l in bullet_lines]
+        if len(set(cites)) == 1 and cites[0] is not None:
+            if all(any(k in l.lower() for k in ("warranty", "year")) for l in bullet_lines):
+                # Keep only the last (most structured) bullet
+                non_bullets = [l for l in lines if not l.startswith("-")]
+                lines = non_bullets + [bullet_lines[-1]]
+    # General dedup
+    deduped: list[str] = []
+    seen_norm: set[str] = set()
+    for line in lines:
+        norm = re.sub(r"\s+", " ", line.lower())
+        norm_nocite = re.sub(r"\[\d+\]", "", norm)
+        if not norm_nocite.strip():
+            continue
+        if norm_nocite.strip() in seen_norm:
+            continue
+        # Check duplicate via same numeric dates (e.g. 15 Jan 2026)
+        nums = set(re.findall(r"\d+", norm_nocite))
+        is_dup = False
+        for s in seen_norm:
+            s_nums = set(re.findall(r"\d+", s))
+            if nums and s_nums and nums == s_nums and "warranty" in norm_nocite and "warranty" in s:
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        seen_norm.add(norm_nocite.strip())
+        deduped.append(line)
+    cleaned = "\n".join(deduped).strip()
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned) if "\n" not in cleaned else cleaned
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     if cleaned and cleaned[0].islower():
         cleaned = cleaned[0].upper() + cleaned[1:]
     return cleaned
@@ -119,15 +169,26 @@ CHAT_PROMPT = """You are a helpful assistant that answers questions about househ
 
 Use the following context from the user's documents to answer their question.
 If the context doesn't contain enough information, say "I don't have enough information from your documents to answer this."
-Answer directly and naturally. Do NOT start with phrases like "According to the context provided," "Based on the context," or "According to the documents".
+Answer directly, concisely and naturally. Do NOT start with phrases like "According to the context provided," "Based on the context," or "According to the documents".
 
-Formatting rules (IMPORTANT):
-- Use Markdown.
-- When the answer requires listing multiple items (e.g., multiple appliances, bills, dates, amounts) use a bullet list: each item on new line starting with "- " and keep it concise.
-- When the answer is an explanation or summary, use one or two short paragraphs.
-- Cite every factual sentence with the source chunk number in brackets like [1], [2] immediately after the fact. Only cite chunks that directly support that line.
-- Example list: "- Bosch Dishwasher [1]: warranty 30 Jun 2026 – 30 Jun 2028 (2 years)"
-- Example paragraph: "The Samsung Refrigerator has a 1-year comprehensive + 9-year compressor warranty [2]. The 1-year part expires on 08 Mar 2027 [2]."
+Formatting rules (IMPORTANT - MUST FOLLOW EXACTLY):
+- Output in Markdown. Use plain English. Be CONCISE.
+- For a SINGLE item (one warranty / one bill / one product): answer in 1-2 sentences OR a single bullet — NOT both. NEVER repeat the same info in a paragraph + bullet list. Do NOT add a second bullet that paraphrases the first.
+- NEVER write meta-commentary like "are as follows", "Here is a bullet list showing...", "Here are the details", "This means that...". Just give the answer.
+- For 2+ bills/invoices/appliances, put EACH invoice on its OWN single line bullet starting with "- ". NEVER put multiple invoices in one bullet, NEVER split one invoice across two bullets.
+- Each bullet MUST be exactly: "- <ShortProvider> [n]: <INV-No> | <Date> | Rs. <Amount>"  OR for warranty "- <Product> [n]: <Warranty> | <Start> – <End> (<Duration>)"
+  Keep to ONE line, max 20 words. No extra line breaks inside a bullet.
+- Good single-item warranty: "LG Front Load Washing Machine [1]: 2-year comprehensive warranty, 15 Jan 2026 – 15 Jan 2028."
+- Good single-item bullet: "- LG Washing Machine [1]: 2-year comprehensive | 15 Jan 2026 – 15 Jan 2028"
+- Good multi-invoice (3 separate single-line bullets):
+  - Pune Water [1]: INV-PMC-WTR-2025-0905 | 05 Sep 2025 | Rs. 1,180
+  - Honda Service [2]: INV-HONDA-SRV-2025-0818 | 18 Aug 2025 | Rs. 9,912
+  - MSEDCL Electricity [3]: INV-MSEDCL-2025-0315 | 15 Mar 2025 | Rs. 3,240
+- Bad (DO NOT DO THIS - verbose + meta + duplicate): "The warranty details are as follows: - The product has a 2-year ... 15 Jan 2028. - This means that any defects... Here is a bullet list: - LG Electronics ..."
+- Bad (DO NOT DO THIS - single line multiple invoices): "- Pune Water – Invoice No: ... - Honda Service – Invoice No: ... - MSEDCL ..."
+- Bad (DO NOT split title): "- Honda Authorized Service Center
+  - Vehicle Servicing Invoice"  <- this is TWO bullets for ONE invoice, WRONG. Must be ONE bullet as above.
+- Cite every fact inline as [1], [2] right after provider/product name. Only cite chunks that support that line.
 
 Context:
 {context}
