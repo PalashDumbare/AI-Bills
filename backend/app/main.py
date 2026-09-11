@@ -1,6 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -17,6 +18,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/documents/upload")
@@ -182,15 +191,12 @@ async def index_document(document_id: str, session: AsyncSession = Depends(get_s
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Answer questions about documents using RAG."""
-    from .services.embeddings import embed_text
-    from .services.vector_store import search_chunks
+    """Answer questions about documents using hybrid RAG (BM25 + Dense)."""
+    from .services.hybrid_search import hybrid_search
     from .services.chat import chat_with_documents
 
-    query_embedding = embed_text(request.question)
-
-    results = search_chunks(
-        query_embedding=query_embedding,
+    results = hybrid_search(
+        query=request.question,
         document_id=request.document_id,
         limit=5,
     )
