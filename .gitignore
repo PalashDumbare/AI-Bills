@@ -37,5 +37,9 @@ uvicorn.log
 # Qdrant local storage
 qdrant_storage/
 
+# Sample bills (do not commit)
+sample_bills/
+sample_bill.pdf
+
 # Alembic
 backend/alembic/versions/*.pyc

@@ -7,17 +7,26 @@ def reciprocal_rank_fusion(
     result_lists: list[list[dict]],
     k: int = 60,
 ) -> list[dict]:
-    """Combine multiple result lists using RRF scoring."""
+    """Combine multiple result lists using RRF scoring. Dedup by document_id:chunk_index or text hash."""
     scores: dict[str, float] = {}
     doc_map: dict[str, dict] = {}
 
+    def _key(doc: dict) -> str:
+        # Prefer stable logical key so BM25 and dense same chunk dedup (now share same id, but fallback for old data)
+        if doc.get("document_id") is not None and doc.get("chunk_index") is not None:
+            return f"{doc['document_id']}:{doc['chunk_index']}"
+        if doc.get("id"):
+            return str(doc["id"])
+        # Fallback: text hash
+        return str(hash(doc.get("text", "")[:200]))
+
     for results in result_lists:
         for rank, doc in enumerate(results):
-            doc_id = doc.get("id") or doc.get("text", "")[:50]
-            if doc_id not in scores:
-                scores[doc_id] = 0.0
-                doc_map[doc_id] = doc
-            scores[doc_id] += 1.0 / (k + rank + 1)
+            key = _key(doc)
+            if key not in scores:
+                scores[key] = 0.0
+                doc_map[key] = doc
+            scores[key] += 1.0 / (k + rank + 1)
 
     sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
     return [
@@ -61,4 +70,15 @@ def hybrid_search(
 
     combined = reciprocal_rank_fusion([bm25_results, dense_results])
 
-    return combined[:limit]
+    # Final dedup by normalized text to avoid showing same invoice content twice (e.g., duplicate uploads)
+    seen_text = set()
+    deduped = []
+    for doc in combined:
+        norm = " ".join(doc.get("text", "").split()[:30]).lower()  # first 30 words normalized
+        if norm not in seen_text:
+            seen_text.add(norm)
+            deduped.append(doc)
+        if len(deduped) >= limit:
+            break
+
+    return deduped
