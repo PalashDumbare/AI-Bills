@@ -8,6 +8,9 @@ from .document import (
     ChatRequest,
     SourceChunk,
     ChatResponse,
+    WebSearchRequest,
+    WebSearchResult,
+    WebSearchResponse,
 )
 
 __all__ = [
@@ -20,4 +23,7 @@ __all__ = [
     "ChatRequest",
     "SourceChunk",
     "ChatResponse",
+    "WebSearchRequest",
+    "WebSearchResult",
+    "WebSearchResponse",
 ]

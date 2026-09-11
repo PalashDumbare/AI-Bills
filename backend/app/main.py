@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .database import get_session, init_db
 from .models import Document, Appliance, Bill
-from .schemas import StructureRequest, StructureResponse, IndexResponse, ChatRequest, ChatResponse
+from .schemas import StructureRequest, StructureResponse, IndexResponse, ChatRequest, ChatResponse, WebSearchRequest, WebSearchResponse
 from .services.extractor import extract_structured_data
 
 
@@ -253,9 +253,34 @@ async def index_document(document_id: str, session: AsyncSession = Depends(get_s
     )
 
 
+@app.get("/web-search", response_model=WebSearchResponse)
+async def web_search_get(q: str, limit: int = 5, fetch_details: bool = False):
+    """Web search (free, no API key) — fetch care numbers, model specs, etc. via DuckDuckGo."""
+    from .services.web_search import search_with_details
+
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query 'q' is required")
+    limit = max(1, min(limit, 10))
+    results = await search_with_details(query=q.strip(), limit=limit, fetch_details=fetch_details)
+    return WebSearchResponse(query=q.strip(), results=results, count=len(results))
+
+
+@app.post("/web-search", response_model=WebSearchResponse)
+async def web_search_post(request: WebSearchRequest):
+    """Web search (free, no API key) — POST variant."""
+    from .services.web_search import search_with_details
+
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+    limit = max(1, min(request.limit, 10))
+    results = await search_with_details(query=query, limit=limit, fetch_details=request.fetch_details)
+    return WebSearchResponse(query=query, results=results, count=len(results))
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Answer questions about documents using hybrid RAG (BM25 + Dense)."""
+    """Answer questions about documents using hybrid RAG (BM25 + Dense). Falls back to web search if enabled."""
     from .services.hybrid_search import hybrid_search
     from .services.chat import chat_with_documents
 
@@ -266,6 +291,39 @@ async def chat(request: ChatRequest):
     )
 
     if not results:
+        # Optional web fallback for care numbers / specs not in docs
+        if request.use_web_search:
+            from .services.web_search import search_with_details
+
+            web_results = await search_with_details(query=request.question, limit=3, fetch_details=True)
+            if web_results:
+                # Convert web snippets to chat context chunks for LLM
+                web_chunks = [
+                    {
+                        "document_id": "web",
+                        "chunk_index": i,
+                        "text": f"{r['title']} — {r['snippet']} ({r['url']})",
+                        "score": 0.9 - i * 0.05,
+                    }
+                    for i, r in enumerate(web_results)
+                ]
+                response = await chat_with_documents(
+                    question=request.question,
+                    context_chunks=web_chunks,
+                )
+                # Mark sources as web
+                return ChatResponse(
+                    answer=response["answer"] + " (from web search)",
+                    sources=[
+                        {
+                            "document_id": "web",
+                            "chunk_index": s["chunk_index"],
+                            "text": s["text"],
+                            "score": s["score"],
+                        }
+                        for s in response["sources"]
+                    ],
+                )
         return ChatResponse(
             answer="No relevant documents found. Please upload and index documents first.",
             sources=[],

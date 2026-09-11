@@ -55,6 +55,26 @@ class IndexResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     document_id: str | None = None
+    use_web_search: bool = False
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+    fetch_details: bool = False
+
+
+class WebSearchResult(BaseModel):
+    title: str
+    url: str
+    snippet: str
+    care_numbers: list[str] | None = None
+
+
+class WebSearchResponse(BaseModel):
+    query: str
+    results: list[WebSearchResult]
+    count: int
 
 
 class SourceChunk(BaseModel):
