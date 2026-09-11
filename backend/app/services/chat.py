@@ -23,8 +23,9 @@ _NO_INFO_PHRASES = [
 
 def _clean_answer(text: str) -> str:
     cleaned = _PREFIX_RE.sub("", text, count=1).lstrip()
-    # Remove citation markers like [1], [2] for display cleanliness (sources list already shows grounding)
-    cleaned = re.sub(r"\s*\[\d+\]\s*", " ", cleaned).strip()
+    # Keep citation markers [1], [2] for inline linked sources - just normalize spacing
+    cleaned = re.sub(r"\s*\[(\d+)\]\s*", r" [\1] ", cleaned).strip()
+    cleaned = re.sub(r"\[(\d+)\]", r"[\1]", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     # Capitalize first letter if stripped left it lowercase
     if cleaned and cleaned[0].islower():
@@ -119,7 +120,14 @@ CHAT_PROMPT = """You are a helpful assistant that answers questions about househ
 Use the following context from the user's documents to answer their question.
 If the context doesn't contain enough information, say "I don't have enough information from your documents to answer this."
 Answer directly and naturally. Do NOT start with phrases like "According to the context provided," "Based on the context," or "According to the documents".
-When you use information from the context, cite the source chunk number in brackets like [1], [2] etc. Only cite chunks that directly support your answer.
+
+Formatting rules (IMPORTANT):
+- Use Markdown.
+- When the answer requires listing multiple items (e.g., multiple appliances, bills, dates, amounts) use a bullet list: each item on new line starting with "- " and keep it concise.
+- When the answer is an explanation or summary, use one or two short paragraphs.
+- Cite every factual sentence with the source chunk number in brackets like [1], [2] immediately after the fact. Only cite chunks that directly support that line.
+- Example list: "- Bosch Dishwasher [1]: warranty 30 Jun 2026 – 30 Jun 2028 (2 years)"
+- Example paragraph: "The Samsung Refrigerator has a 1-year comprehensive + 9-year compressor warranty [2]. The 1-year part expires on 08 Mar 2027 [2]."
 
 Context:
 {context}
