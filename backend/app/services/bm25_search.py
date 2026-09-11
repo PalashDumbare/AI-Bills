@@ -15,7 +15,11 @@ class BM25Index:
 
     def add_documents(self, chunks: list[dict]):
         for chunk in chunks:
-            doc_id = str(uuid.uuid4())
+            # Respect upstream id (Qdrant point_id) so BM25 and dense share same id for RRF dedup
+            doc_id = chunk.get("id") or str(uuid.uuid4())
+            # Avoid duplicate ids if same chunk re-indexed
+            if doc_id in self.documents:
+                continue
             self.documents[doc_id] = chunk
             self.ids.append(doc_id)
             self.texts.append(chunk["text"])
