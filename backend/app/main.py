@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .database import get_session, init_db
 from .models import Document, Appliance, Bill
-from .schemas import StructureRequest, StructureResponse, IndexResponse, ChatRequest, ChatResponse
+from .schemas import StructureRequest, StructureResponse, IndexResponse, ChatRequest, ChatResponse, WebSearchRequest, WebSearchResponse
 from .services.extractor import extract_structured_data
 
 
@@ -253,30 +253,95 @@ async def index_document(document_id: str, session: AsyncSession = Depends(get_s
     )
 
 
+@app.get("/web-search", response_model=WebSearchResponse)
+async def web_search_get(q: str, limit: int = 5, fetch_details: bool = False):
+    """Web search (free, no API key) — fetch care numbers, model specs, etc. via DuckDuckGo."""
+    from .services.web_search import search_with_details
+
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query 'q' is required")
+    limit = max(1, min(limit, 10))
+    results = await search_with_details(query=q.strip(), limit=limit, fetch_details=fetch_details)
+    return WebSearchResponse(query=q.strip(), results=results, count=len(results))
+
+
+@app.post("/web-search", response_model=WebSearchResponse)
+async def web_search_post(request: WebSearchRequest):
+    """Web search (free, no API key) — POST variant."""
+    from .services.web_search import search_with_details
+
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+    limit = max(1, min(request.limit, 10))
+    results = await search_with_details(query=query, limit=limit, fetch_details=request.fetch_details)
+    return WebSearchResponse(query=query, results=results, count=len(results))
+
+
+def _is_web_intent(question: str) -> bool:
+    q = question.lower()
+    web_keywords = (
+        "customer care", "care number", "helpline", "toll free", "toll-free",
+        "support number", "contact number", "contact us", "customer support",
+        "specification", "specs", "spec", "features", "model details",
+    )
+    return any(k in q for k in web_keywords)
+
+
+async def _web_fallback(question: str):
+    from .services.web_search import search_with_details
+    from .services.chat import chat_with_documents
+
+    web_results = await search_with_details(query=question, limit=3, fetch_details=True)
+    if not web_results:
+        return None
+    web_chunks = [
+        {
+            "document_id": "web",
+            "chunk_index": i,
+            "text": f"{r['title']} — {r['snippet']} ({r['url']})",
+            "score": 0.9 - i * 0.05,
+        }
+        for i, r in enumerate(web_results)
+    ]
+    resp = await chat_with_documents(question=question, context_chunks=web_chunks)
+    return ChatResponse(
+        answer=resp["answer"] + " (from web search)",
+        sources=[
+            {"document_id": "web", "chunk_index": s["chunk_index"], "text": s["text"], "score": s["score"]}
+            for s in resp["sources"]
+        ],
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Answer questions about documents using hybrid RAG (BM25 + Dense)."""
+    """Answer questions about documents using hybrid RAG (BM25 + Dense). Auto-falls back to web search for care/spec queries."""
     from .services.hybrid_search import hybrid_search
     from .services.chat import chat_with_documents
 
-    results = hybrid_search(
-        query=request.question,
-        document_id=request.document_id,
-        limit=5,
-    )
+    question = request.question.strip()
+    should_try_web = request.use_web_search or _is_web_intent(question)
+
+    results = hybrid_search(query=question, document_id=request.document_id, limit=5)
 
     if not results:
+        if should_try_web:
+            fallback = await _web_fallback(question)
+            if fallback:
+                return fallback
         return ChatResponse(
             answer="No relevant documents found. Please upload and index documents first.",
             sources=[],
         )
 
-    response = await chat_with_documents(
-        question=request.question,
-        context_chunks=results,
-    )
+    response = await chat_with_documents(question=question, context_chunks=results)
 
-    return ChatResponse(
-        answer=response["answer"],
-        sources=response["sources"],
-    )
+    # If RAG says no info (or filtered to 0 sources) and question looks like web intent, fallback to web
+    no_info = "don't have enough information" in response["answer"].lower() or not response["sources"]
+    if no_info and should_try_web:
+        fallback = await _web_fallback(question)
+        if fallback:
+            return fallback
+
+    return ChatResponse(answer=response["answer"], sources=response["sources"])
