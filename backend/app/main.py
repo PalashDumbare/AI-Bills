@@ -14,6 +14,13 @@ from .services.extractor import extract_structured_data
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Warm BM25 from disk / Qdrant so restart doesn't lose hybrid search (BM25 was in-memory)
+    try:
+        from .services.bm25_search import get_bm25_index
+
+        get_bm25_index()
+    except Exception:
+        pass
     yield
 
 
