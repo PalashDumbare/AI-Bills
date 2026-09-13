@@ -20,6 +20,31 @@ _NO_INFO_PHRASES = [
     "no relevant documents",
 ]
 
+# Phone / care number pattern for hallucination detection (India 1800/1860, US 1-800)
+_CARE_NUMBER_RE = re.compile(
+    r"(?:\+?91[\s-]?)?(?:1[\s-]?800|1800|1860)[\s-]?\d{3}[\s-]?\d{4}|\b\d{3,4}[\s-]\d{6,8}\b"
+)
+
+
+def _has_hallucinated_numbers(answer: str, sources: list[dict]) -> bool:
+    """Return True if answer contains a phone/care number not grounded in any source text."""
+    numbers = _CARE_NUMBER_RE.findall(answer)
+    if not numbers:
+        return False
+    # Normalize source texts joined
+    source_text = " ".join(s.get("text", "") for s in sources)
+    # Normalize for comparison: strip spaces/dashes
+    def _norm(n: str) -> str:
+        return re.sub(r"[\s\-]", "", n)
+    for n in numbers:
+        norm_n = _norm(n)
+        # check if digits appear in source (allow spaces/dashes variance)
+        if norm_n not in re.sub(r"[\s\-]", "", source_text):
+            # also check raw substring fallback
+            if n.strip() not in source_text:
+                return True
+    return False
+
 
 def _clean_answer(text: str) -> str:
     cleaned = _PREFIX_RE.sub("", text, count=1).lstrip()
@@ -167,8 +192,9 @@ def _filter_sources(answer: str, sources: list[dict]) -> list[dict]:
 
 CHAT_PROMPT = """You are a helpful assistant that answers questions about household bills, invoices, and receipts.
 
-Use the following context from the user's documents to answer their question.
+Use ONLY the following context from the user's documents to answer their question.
 If the context doesn't contain enough information, say "I don't have enough information from your documents to answer this."
+CRITICAL: Never invent, guess, or hallucinate phone numbers, care numbers, prices, dates, specs, or warranty details. If a phone number / care number / spec is not literally present in the context text, you MUST say you don't have enough information — do not generate a plausible-looking number.
 Answer directly, concisely and naturally. Do NOT start with phrases like "According to the context provided," "Based on the context," or "According to the documents".
 
 Formatting rules (IMPORTANT - MUST FOLLOW EXACTLY):
@@ -233,8 +259,20 @@ async def chat_with_documents(
 
             result = response.json()
             raw_answer = result.get("response", "").strip()
+            # Hallucination guard: if LLM invented a care number not in sources, force no_info
+            if _has_hallucinated_numbers(raw_answer, sources):
+                return {
+                    "answer": "I don't have enough information from your documents to answer this.",
+                    "sources": [],
+                }
             filtered = _filter_sources(raw_answer, sources)
             answer = _clean_answer(raw_answer)
+            # Re-check after cleaning (citations stripped) — still hallucinated?
+            if _has_hallucinated_numbers(answer, sources):
+                return {
+                    "answer": "I don't have enough information from your documents to answer this.",
+                    "sources": [],
+                }
 
             return {
                 "answer": answer,
