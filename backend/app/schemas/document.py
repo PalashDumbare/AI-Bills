@@ -52,10 +52,16 @@ class IndexResponse(BaseModel):
     total_chunks: int
 
 
+class ChatHistoryItem(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str
     document_id: str | None = None
     use_web_search: bool = False
+    history: list[ChatHistoryItem] | None = None
 
 
 class WebSearchRequest(BaseModel):

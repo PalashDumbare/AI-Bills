@@ -427,7 +427,7 @@ def _is_web_intent(question: str) -> bool:
     return any(k in q for k in web_keywords)
 
 
-async def _web_fallback(question: str):
+async def _web_fallback(question: str, history: list[dict] | None = None):
     from .services.web_search import search_with_details
     from .services.chat import chat_with_documents
 
@@ -454,7 +454,7 @@ async def _web_fallback(question: str):
                 "score": 0.9 - i * 0.05,
             }
         )
-    resp = await chat_with_documents(question=question, context_chunks=web_chunks)
+    resp = await chat_with_documents(question=question, context_chunks=web_chunks, history=history)
     # If LLM hallucinated or said no_info despite web context, fallback to direct care-number extraction
     if not resp["sources"] or "don't have enough information" in resp["answer"].lower():
         # Try to build answer directly from extracted care numbers
@@ -505,18 +505,30 @@ async def _web_fallback(question: str):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Answer questions about documents using hybrid RAG (BM25 + Dense). Auto-falls back to web search for care/spec queries."""
+    """Answer questions about documents using hybrid RAG (BM25 + Dense). Auto-falls back to web search for care/spec queries. Supports multiturn via history."""
     from .services.hybrid_search import hybrid_search
     from .services.chat import chat_with_documents
 
     question = request.question.strip()
     should_try_web = request.use_web_search or _is_web_intent(question)
+    # Convert pydantic history to list[dict] for chat service
+    history = None
+    if request.history:
+        history = [{"role": h.role, "content": h.content} for h in request.history]
 
-    results = hybrid_search(query=question, document_id=request.document_id, limit=5)
+    # For retrieval, use current question + last user message from history for better co-reference
+    retrieval_query = question
+    if history:
+        # If question is short / pronoun-heavy ("what about its warranty?"), prepend last user question
+        last_user = next((h["content"] for h in reversed(history) if h["role"] == "user"), None)
+        if last_user and len(question.split()) <= 6 and any(w in question.lower() for w in ("it", "its", "that", "this", "warranty", "price", "amount")):
+            retrieval_query = f"{last_user} {question}"
+
+    results = hybrid_search(query=retrieval_query, document_id=request.document_id, limit=5)
 
     if not results:
         if should_try_web:
-            fallback = await _web_fallback(question)
+            fallback = await _web_fallback(question, history=history)
             if fallback:
                 return fallback
         return ChatResponse(
@@ -524,13 +536,13 @@ async def chat(request: ChatRequest):
             sources=[],
         )
 
-    response = await chat_with_documents(question=question, context_chunks=results)
+    response = await chat_with_documents(question=question, context_chunks=results, history=history)
 
     # If RAG says no info, has no sources, OR hallucinated (numbers not grounded -> returned no_info with empty sources),
     # and question looks like web intent, fallback to web
     no_info = "don't have enough information" in response["answer"].lower() or not response["sources"]
     if no_info and should_try_web:
-        fallback = await _web_fallback(question)
+        fallback = await _web_fallback(question, history=history)
         if fallback:
             return fallback
     # Even if RAG returned an answer for care/spec intent, verify grounding:
@@ -544,7 +556,7 @@ async def chat(request: ChatRequest):
         answer_has_number = bool(extract_care_numbers(response["answer"]))
         if not rag_has_number and not answer_has_number:
             # RAG has no numbers to answer care query -> try web for richer result (keep RAG if web fails)
-            fallback = await _web_fallback(question)
+            fallback = await _web_fallback(question, history=history)
             if fallback and fallback.sources:
                 return fallback
 
