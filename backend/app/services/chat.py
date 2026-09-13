@@ -219,6 +219,7 @@ Formatting rules (IMPORTANT - MUST FOLLOW EXACTLY):
 Context:
 {context}
 
+{history_block}
 Question: {question}
 
 Answer:"""
@@ -227,9 +228,24 @@ Answer:"""
 async def chat_with_documents(
     question: str,
     context_chunks: list[dict],
+    history: list[dict] | None = None,
 ) -> dict:
-    """Send question + context to LLM and return answer with sources."""
+    """Send question + context to LLM and return answer with sources. history is list of {role, content} for multiturn."""
     settings = get_settings()
+    # Build history block (last 6 turns) for co-reference like "what about its warranty?"
+    history_block = ""
+    if history:
+        trimmed = history[-6:]  # keep last 3 exchanges
+        lines = []
+        for h in trimmed:
+            role = h.get("role", "user")
+            content = h.get("content", "").strip()[:500]
+            if not content:
+                continue
+            prefix = "User" if role == "user" else "Assistant"
+            lines.append(f"{prefix}: {content}")
+        if lines:
+            history_block = "Conversation history (for context, use to resolve pronouns like 'it', 'its'):\n" + "\n".join(lines) + "\n"
 
     context_parts = []
     sources = []
@@ -243,7 +259,7 @@ async def chat_with_documents(
         })
 
     context = "\n\n".join(context_parts)
-    prompt = CHAT_PROMPT.format(context=context, question=question)
+    prompt = CHAT_PROMPT.format(context=context, history_block=history_block, question=question)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
